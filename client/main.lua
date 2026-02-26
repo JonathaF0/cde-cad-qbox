@@ -44,70 +44,162 @@ RegisterNetEvent('QBCore:Player:SetPlayerData', function(data)
 end)
 
 -- =============================================================================
--- NOTIFICATION HANDLER
+-- NOTIFICATIONS
 -- =============================================================================
 
 RegisterNetEvent('cdecad-sync:client:notify', function(type, message)
     if Config.Notifications.UseOxLib then
         lib.notify({
-            title = 'CAD System',
+            title = 'CDECAD',
             description = message,
             type = type,
             duration = Config.Notifications.Duration,
             position = Config.Notifications.Position
         })
     else
-        -- Fallback to QBox notification
-        exports.qbx_core:Notify(message, type, Config.Notifications.Duration)
+        -- Fallback to chat
+        TriggerEvent('chat:addMessage', {
+            color = type == 'success' and {0, 255, 0} or type == 'error' and {255, 0, 0} or {255, 255, 255},
+            args = {'[CDECAD]', message}
+        })
     end
 end)
+
+-- =============================================================================
+-- POSTAL CODE FUNCTIONS
+-- =============================================================================
+
+-- Get postal code from configured resource
+function GetPostalCode()
+    -- Check if postal is enabled
+    if not Config.Postal or not Config.Postal.Enabled then
+        return nil
+    end
+    
+    local postal = nil
+    local resource = Config.Postal.Resource or 'nearest-postal'
+    
+    -- Try to get postal based on configured resource
+    if resource == 'nearest-postal' then
+        -- Standard nearest-postal export
+        local success, result = pcall(function()
+            return exports['nearest-postal']:getPostal()
+        end)
+        if success and result then
+            postal = result
+        end
+    elseif resource == 'npostal' then
+        -- Custom npostal export (requires modification to nearest-postal)
+        local success, result = pcall(function()
+            return exports.npostal:npostal()
+        end)
+        if success and result then
+            postal = result
+        end
+    elseif resource == 'qb-postal' then
+        -- QBCore postal
+        local success, result = pcall(function()
+            return exports['qb-postal']:getPostal()
+        end)
+        if success and result then
+            postal = result
+        end
+    elseif resource == 'custom' then
+        -- Custom export
+        local exportName = Config.Postal.CustomExport
+        local funcName = Config.Postal.CustomFunction or 'getPostal'
+        
+        if exportName then
+            local success, result = pcall(function()
+                return exports[exportName][funcName]()
+            end)
+            if success and result then
+                postal = result
+            end
+        end
+    end
+    
+    -- Return postal or fallback
+    if postal then
+        Utils.Debug('Got postal code:', postal)
+        return tostring(postal)
+    else
+        Utils.Debug('No postal code available')
+        return Config.Postal.FallbackText
+    end
+end
 
 -- =============================================================================
 -- LOCATION HELPERS
 -- =============================================================================
 
 -- Get current street name
-local function GetStreetName()
+function GetCurrentStreetName()
     local coords = GetEntityCoords(PlayerPedId())
     local streetHash, crossingHash = GetStreetNameAtCoord(coords.x, coords.y, coords.z)
     local streetName = GetStreetNameFromHashKey(streetHash)
     local crossingName = GetStreetNameFromHashKey(crossingHash)
     
     if crossingName and crossingName ~= '' then
-        return streetName .. ' / ' .. crossingName
+        return streetName .. ' & ' .. crossingName
     end
-    
     return streetName
 end
 
 -- Get current zone name
-local function GetZoneName()
+function GetCurrentZoneName()
     local coords = GetEntityCoords(PlayerPedId())
-    return GetNameOfZone(coords.x, coords.y, coords.z)
+    return GetLabelText(GetNameOfZone(coords.x, coords.y, coords.z))
 end
 
--- Get postal code (requires postal resource)
-local function GetPostal()
-    if not Config.Calls.SendPostal then return nil end
+-- Format location string with postal
+function FormatLocationString(street, zone, postal)
+    local format
     
-    -- Try different postal exports
-    if GetResourceState('nearest-postal') == 'started' then
-        local postal = exports['nearest-postal']:getPostal()
-        return postal and tostring(postal) or nil
-    elseif GetResourceState('postal') == 'started' then
-        local postal = exports['postal']:getPostal()
-        return postal and tostring(postal) or nil
+    if postal and Config.Postal.IncludeInLocation then
+        format = Config.Postal.LocationFormat or '{street}, {zone} (Postal: {postal})'
+        format = format:gsub('{street}', street or 'Unknown')
+        format = format:gsub('{zone}', zone or 'Unknown')
+        format = format:gsub('{postal}', postal)
+    else
+        format = Config.Postal.LocationFormatNoPostal or '{street}, {zone}'
+        format = format:gsub('{street}', street or 'Unknown')
+        format = format:gsub('{zone}', zone or 'Unknown')
     end
     
-    return nil
+    return format
 end
 
--- Get player's current vehicle info
-local function GetCurrentVehicle()
+-- Get location info for 911 calls
+function GetLocationInfo()
+    local coords = GetEntityCoords(PlayerPedId())
+    local street = GetCurrentStreetName()
+    local zone = GetCurrentZoneName()
+    local postal = GetPostalCode()
+    
+    -- Format the full location string
+    local locationString = FormatLocationString(street, zone, postal)
+    
+    return {
+        street = street,
+        zone = zone,
+        postal = postal,
+        location = locationString,
+        coords = coords,
+        x = coords.x,
+        y = coords.y,
+        z = coords.z
+    }
+end
+
+-- Get current vehicle info
+function GetCurrentVehicle()
     local ped = PlayerPedId()
     local vehicle = GetVehiclePedIsIn(ped, false)
     
-    if vehicle == 0 then return nil end
+    if vehicle == 0 then
+        return nil
+    end
     
     local plate = GetVehicleNumberPlateText(vehicle)
     local model = GetEntityModel(vehicle)
@@ -115,176 +207,39 @@ local function GetCurrentVehicle()
     
     return {
         vehicle = vehicle,
-        plate = plate and plate:gsub('%s+', '') or 'UNKNOWN',
-        model = displayName or 'Unknown',
-        color = 'Unknown' -- Could be expanded to get actual color
+        plate = plate:gsub('%s+', ''),
+        model = displayName,
+        class = GetVehicleClass(vehicle)
     }
 end
 
 -- =============================================================================
--- 911 CALL SYSTEM
+-- 911 CALL PREPARATION
 -- =============================================================================
 
--- Prepare 911 call with location data
-RegisterNetEvent('cdecad-sync:client:prepare911', function(message, anonymous)
-    if not isLoggedIn then return end
+-- Prepare 911 call data
+function Prepare911CallData(callType, anonymous)
+    local location = GetLocationInfo()
     
-    local coords = GetEntityCoords(PlayerPedId())
-    local street = GetStreetName()
-    local zone = GetZoneName()
-    local postal = GetPostal()
-    
-    local location = street
-    if zone and zone ~= '' then
-        location = location .. ', ' .. zone
-    end
-    
-    local callData = {
-        callType = 'Emergency Call',
-        location = location,
-        message = message,
-        anonymous = anonymous,
-        coords = {
-            x = coords.x,
-            y = coords.y,
-            z = coords.z
-        },
-        street = street,
-        zone = zone,
-        postal = postal
+    return {
+        callType = callType,
+        location = location.location,  -- Use formatted location string
+        street = location.street,
+        zone = location.zone,
+        postal = location.postal,
+        coords = location.coords,
+        anonymous = anonymous or false
     }
-    
-    -- Determine call type from message
-    local lowerMessage = message:lower()
-    
-    if lowerMessage:find('shot') or lowerMessage:find('gun') or lowerMessage:find('shoot') then
-        callData.callType = 'Shots Fired'
-    elseif lowerMessage:find('fight') or lowerMessage:find('assault') then
-        callData.callType = 'Assault'
-    elseif lowerMessage:find('robbery') or lowerMessage:find('rob') then
-        callData.callType = 'Robbery'
-    elseif lowerMessage:find('accident') or lowerMessage:find('crash') then
-        callData.callType = 'Traffic Accident'
-    elseif lowerMessage:find('fire') then
-        callData.callType = 'Fire'
-    elseif lowerMessage:find('medical') or lowerMessage:find('ambulance') or lowerMessage:find('injured') then
-        callData.callType = 'Medical Emergency'
-    elseif lowerMessage:find('stolen') then
-        callData.callType = 'Stolen Vehicle'
-    elseif lowerMessage:find('pursuit') or lowerMessage:find('chase') then
-        callData.callType = 'Pursuit'
-    end
-    
-    -- Add message to location for more detail
-    callData.location = callData.location .. ' - ' .. message
-    
-    TriggerServerEvent('cdecad-sync:server:911call', callData)
-end)
-
--- =============================================================================
--- VEHICLE REPORTING
--- =============================================================================
-
--- Report current vehicle as stolen
-RegisterNetEvent('cdecad-sync:client:reportStolenVehicle', function(description)
-    local vehicleInfo = GetCurrentVehicle()
-    
-    if not vehicleInfo then
-        lib.notify({
-            title = 'CAD System',
-            description = 'You are not in a vehicle',
-            type = 'error'
-        })
-        return
-    end
-    
-    local coords = GetEntityCoords(PlayerPedId())
-    local street = GetStreetName()
-    
-    TriggerServerEvent('cdecad-sync:server:reportStolen', vehicleInfo.plate, description or street)
-end)
-
--- =============================================================================
--- VEHICLE REGISTRATION SYNC
--- =============================================================================
-
--- Hook into vehicle purchase events
--- This depends on your vehicle shop resource
-
--- For qbx_vehicleshop
-RegisterNetEvent('qbx_vehicleshop:client:vehiclePurchased', function(vehicleData)
-    if not Config.Sync.SyncVehicles then return end
-    
-    Wait(2000) -- Wait for server to process
-    
-    local vehicle = GetCurrentVehicle()
-    if vehicle then
-        TriggerServerEvent('cdecad-sync:server:registerVehicle', {
-            plate = vehicle.plate,
-            model = vehicle.model,
-            make = vehicleData.brand or 'Unknown',
-            year = vehicleData.year or os.date('%Y'),
-            color = vehicle.color
-        })
-    end
-end)
-
--- Generic vehicle registration (can be called by other resources)
-RegisterNetEvent('cdecad-sync:client:registerVehicle', function(vehicleData)
-    if not Config.Sync.SyncVehicles then return end
-    TriggerServerEvent('cdecad-sync:server:registerVehicle', vehicleData)
-end)
-
--- =============================================================================
--- LOCATION UPDATES (Optional real-time tracking)
--- =============================================================================
-
-if Config.Sync.LocationUpdateInterval > 0 then
-    CreateThread(function()
-        while true do
-            Wait(Config.Sync.LocationUpdateInterval * 1000)
-            
-            if isLoggedIn then
-                -- Check if on-duty requirement
-                if Config.Sync.LocationOnDutyOnly then
-                    local job = PlayerData.job
-                    if not job or not job.onduty then
-                        goto continue
-                    end
-                end
-                
-                local coords = GetEntityCoords(PlayerPedId())
-                local street = GetStreetName()
-                
-                TriggerServerEvent('cdecad-sync:server:locationUpdate', {
-                    coords = { x = coords.x, y = coords.y, z = coords.z },
-                    street = street,
-                    heading = GetEntityHeading(PlayerPedId())
-                })
-            end
-            
-            ::continue::
-        end
-    end)
 end
 
 -- =============================================================================
 -- EXPORTS
 -- =============================================================================
 
--- Get current location info
-exports('GetLocationInfo', function()
-    local coords = GetEntityCoords(PlayerPedId())
-    return {
-        coords = coords,
-        street = GetStreetName(),
-        zone = GetZoneName(),
-        postal = GetPostal()
-    }
-end)
-
--- Get current vehicle info
+exports('GetLocationInfo', GetLocationInfo)
 exports('GetCurrentVehicle', GetCurrentVehicle)
+exports('Prepare911CallData', Prepare911CallData)
+exports('GetPostalCode', GetPostalCode)
 
 -- =============================================================================
 -- INITIALIZATION
@@ -297,6 +252,18 @@ CreateThread(function()
     end
     
     UpdatePlayerData()
+    
+    -- Test postal on load
+    if Config.Postal and Config.Postal.Enabled then
+        Wait(2000) -- Give postal resource time to initialize
+        local testPostal = GetPostalCode()
+        if testPostal then
+            Utils.Debug('Postal integration working. Current postal:', testPostal)
+        else
+            Utils.Debug('Postal integration enabled but no postal returned. Check Config.Postal.Resource setting.')
+        end
+    end
+    
     Utils.Debug('Client: Initialized (QBox)')
 end)
 
