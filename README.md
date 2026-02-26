@@ -17,6 +17,7 @@ A comprehensive FiveM resource that automatically syncs QBox character data to y
 - [QBox (qbx_core)](https://github.com/Qbox-project/qbx_core)
 - [ox_lib](https://github.com/overextended/ox_lib)
 - [Badger_Discord_API](https://github.com/JaredScar/Badger_Discord_API) (Optional, recommended)
+- [NearestPostal](https://forum.cfx.re/t/release-nearest-postal-script/293511) (Optional, recommended)
 
 ## Installation
 
