@@ -13,10 +13,48 @@ Config = {}
 Config.API_URL = 'https://your-cdecad-instance.com/api'
 
 -- Your CDECAD API Key (get this from your CDECAD admin panel)
-Config.API_KEY = 'fivem-cad-911-key-2024'
+Config.API_KEY = 'yourapikey'
 
 -- Your Community ID (Discord Guild ID that matches your CDECAD community)
 Config.COMMUNITY_ID = '1234567890123456789'
+
+-- =============================================================================
+-- POSTAL CODE SETTINGS
+-- =============================================================================
+
+Config.Postal = {
+    -- Enable postal code integration
+    Enabled = true,
+    
+    -- Which postal resource to use
+    -- Options: 
+    --   'nearest-postal' - Uses exports['nearest-postal']:getPostal() (most common)
+    --   'npostal'        - Uses exports.npostal:npostal() (requires adding export to nearest-postal cl.lua)
+    --   'qb-postal'      - Uses exports['qb-postal']:getPostal()
+    --   'custom'         - Use your own export (set CustomExport and CustomFunction below)
+    Resource = 'nearest-postal',
+    
+    -- Custom export settings (only used if Resource = 'custom')
+    CustomExport = 'your-postal-resource',
+    CustomFunction = 'getPostal',
+    
+    -- Include postal in 911 call location string
+    IncludeIn911 = true,
+    
+    -- Include postal in location updates
+    IncludeInLocation = true,
+    
+    -- Format for displaying postal in location string
+    -- Use {postal} as placeholder for the postal code
+    -- Use {street} for street name, {zone} for zone name
+    LocationFormat = '{street}, {zone} (Postal: {postal})',
+    
+    -- Format when postal is not available
+    LocationFormatNoPostal = '{street}, {zone}',
+    
+    -- Fallback text when postal is unavailable
+    FallbackText = nil  -- Set to nil to just omit postal, or 'Unknown' etc.
+}
 
 -- =============================================================================
 -- SYNC SETTINGS
@@ -104,11 +142,8 @@ Config.Calls = {
     -- Send player coordinates with 911 calls
     SendCoordinates = true,
     
-    -- Send postal code (requires postal resource)
+    -- Send postal code (requires Config.Postal.Enabled = true)
     SendPostal = true,
-    
-    -- Postal export name (common options: 'nearest-postal', 'esx_postal')
-    PostalExport = 'nearest-postal',
     
     -- Cooldown between 911 calls (in seconds)
     Cooldown = 30,
